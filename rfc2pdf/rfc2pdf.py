@@ -5,16 +5,28 @@ from fpdf import XPos, YPos
 import sys
 import re
 
+def split_at_pagebreak(lines):
+    indices = [i for i, x in enumerate(lines[:-1]) if "\x0C" in x]
+    for start, end in zip([0, *[j+1 for j in indices]], [*indices, len(lines)]):
+        yield lines[start:end+1]
+        
 class PDF_RFC(object):
-    def __init__(self, rfc_textual_format_filename, pdf_output_filename, ttf_file, side_margins, top_margin, generate_bookmarks) -> None:
+    def __init__(self, rfc_textual_format_filename, pdf_output_filename, ttf_file, side_margins, top_margin, generate_bookmarks, author = "", title = "", keywords = "", creator = "" ) -> None:
         self._pdf_object=FPDF("P", "mm", "A4")
 
-        self.re_section_name=re.compile("^[1-9]\.")
-        self.re_subsection_name=re.compile("^[1-9]\.[1-9].")
-        self.re_subsubsection_name=re.compile("^[1-9]\.[1-9].[1-9]\.")
+        self.re_section_name=re.compile(r"^[1-9]\.")
+        self.re_subsection_name=re.compile(r"^[1-9]\.[1-9].")
+        self.re_subsubsection_name=re.compile(r"^[1-9]\.[1-9].[1-9]\.")
 
-        self._pdf_object.add_font("UserDefinedMonospacedFont", "", ttf_file)
+        self._pdf_object.add_font("UserDefinedMonospacedFont", "", ttf_file, True)
         self._pdf_object.set_font('UserDefinedMonospacedFont', '', 12)
+
+        self._pdf_object.set_author(author)
+        self._pdf_object.set_title(title)
+        self._pdf_object.set_keywords(keywords)
+        self._pdf_object.set_creator(creator)
+
+        self._pdf_object.set_compression(True)
 
         top_margin=int(top_margin)
         side_margins=int(side_margins)
@@ -34,18 +46,24 @@ class PDF_RFC(object):
         self._pdf_object.set_margins(self._margin_left, self._margin_top, self._margin_left)
 
     def get_textual_lines_from_rfc(self, rfc_textual_format_filename):
-        #print(rfc_textual_format_filename)
-        with open(rfc_textual_format_filename, "r", encoding="iso-8859-1") as descriptor:
-            lines=descriptor.readlines()
-            return lines
+        #byte order check
+        with open(rfc_textual_format_filename, "rb") as f:
+            bom = x=f.read(3)
+            utf8= bom == b'\xef\xbb\xbf'
+        encoding = "iso8859-1"
+        if utf8:
+            encoding = "utf8"
+        with open(rfc_textual_format_filename, "r", encoding=encoding) as descriptor:
+            return descriptor.readlines()
 
     def dump_lines_to_pdf(self, rfc_text_lines, generate_bookmarks):
-        cover_page=rfc_text_lines[0:59]
+        pages = list(split_at_pagebreak(rfc_text_lines))
+        # fallback for "new" rfcs
+        if len(pages) < 2:
+            pages = [rfc_text_lines[0:59]] + [rfc_text_lines[line_pos:line_pos+56] for line_pos in range(60, len(rfc_text_lines), 56)]
         
-        self.add_page(cover_page, is_cover_page=True, generate_bookmarks=generate_bookmarks)
-        #self._pdf_object.Bookmark("Prueba", level=1, y=-1)
-        for line_pos in range(60, len(rfc_text_lines), 56):
-            self.add_page(rfc_text_lines[line_pos:line_pos+56])
+        for i, page in enumerate(pages):
+            self.add_page(page, is_cover_page=(i==0), generate_bookmarks=generate_bookmarks)
 
     def convert_points_to_mm(self, amount_in_points):
         #1 point is 0.35277 mm
@@ -101,7 +119,7 @@ class PDF_RFC(object):
         self._pdf_object.add_page()
         
         total_lines=len(lines)
-        mm_per_line=(A4_HEIGHT_MM-(2*self._margin_top)) / total_lines
+        mm_per_line=(A4_HEIGHT_MM-(2*self._margin_top)) / 60 #total_lines - rfc 672
         for line_number, line in enumerate(lines):
             if (not is_cover_page) and generate_bookmarks:
                 self.add_section_if_necessary(line_number, line)            
